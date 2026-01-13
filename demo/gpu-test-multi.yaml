@@ -1,0 +1,56 @@
+# Test pod requesting multiple GPUs in a single claim
+# Demonstrates multiple devices in metadata JSON
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-test-multi
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: gpu-test-multi
+  name: multi-gpu
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpus
+        exactly:
+          deviceClassName: gpu.example.com
+          count: 2
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: gpu-test-multi
+  name: multi-gpu-pod
+  labels:
+    app: multi-gpu
+spec:
+  containers:
+  - name: reader
+    image: ubuntu:22.04
+    command: ["bash", "-c"]
+    args:
+    - |
+      echo "=== Device Metadata JSON ==="
+      sleep 2
+      find /var/run/dra -name "*.json" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || echo "No metadata files found"
+      echo ""
+      echo "=== Environment Variables ==="
+      export
+      echo ""
+      echo "Sleeping..."
+      trap 'exit 0' TERM
+      sleep 9999 & wait
+    resources:
+      claims:
+      - name: gpus
+    # Note: /var/run/dra is automatically mounted via CDI
+  resourceClaims:
+  - name: gpus
+    resourceClaimTemplateName: multi-gpu

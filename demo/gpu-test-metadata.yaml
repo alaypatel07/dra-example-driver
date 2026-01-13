@@ -1,0 +1,57 @@
+# Test pod that mounts and displays device metadata JSON
+# The metadata is written to /var/run/dra/<driver-name>/<namespace>/<claim-name>-<uid>.json
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-test-metadata
+
+---
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: gpu-test-metadata
+  name: single-gpu
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpu
+        exactly:
+          deviceClassName: gpu.example.com
+
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: gpu-test-metadata
+  name: metadata-reader
+  labels:
+    app: metadata-reader
+spec:
+  containers:
+  - name: reader
+    image: ubuntu:22.04
+    command: ["bash", "-c"]
+    args:
+    - |
+      echo "=== Device Metadata JSON ==="
+      # Wait for metadata file to be created
+      sleep 2
+      # Find and display metadata files
+      find /var/run/dra -name "*.json" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || echo "No metadata files found"
+      echo ""
+      echo "=== Environment Variables ==="
+      export
+      echo ""
+      echo "Sleeping... (Ctrl+C or delete pod to exit)"
+      trap 'exit 0' TERM
+      sleep 9999 & wait
+    resources:
+      claims:
+      - name: gpu
+    # Note: /var/run/dra is automatically mounted via CDI
+  resourceClaims:
+  - name: gpu
+    resourceClaimTemplateName: single-gpu

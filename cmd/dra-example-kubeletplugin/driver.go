@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -27,11 +28,13 @@ import (
 	coreclientset "k8s.io/client-go/kubernetes"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
+
+	"sigs.k8s.io/dra-example-driver/internal/downwardapihelper"
 )
 
 type driver struct {
 	client      coreclientset.Interface
-	helper      *kubeletplugin.Helper
+	helper      *downwardapihelper.Helper
 	state       *DeviceState
 	healthcheck *healthcheck
 	cancelCtx   func(error)
@@ -49,14 +52,21 @@ func NewDriver(ctx context.Context, config *Config) (*driver, error) {
 	}
 	driver.state = state
 
-	helper, err := kubeletplugin.Start(
-		ctx,
-		driver,
+	kubeletOpts := []kubeletplugin.Option{
 		kubeletplugin.KubeClient(config.coreclient),
 		kubeletplugin.NodeName(config.flags.nodeName),
 		kubeletplugin.DriverName(config.flags.driverName),
 		kubeletplugin.RegistrarDirectoryPath(config.flags.kubeletRegistrarDirectoryPath),
 		kubeletplugin.PluginDataDirectoryPath(config.DriverPluginPath()),
+	}
+
+	metadataPath := filepath.Join("/var/run/dra", config.flags.driverName)
+	helper, err := downwardapihelper.Start(
+		ctx,
+		driver,
+		config.flags.driverName,
+		kubeletOpts,
+		downwardapihelper.DeviceMetadataJSON(metadataPath, config.flags.cdiRoot),
 	)
 	if err != nil {
 		return nil, err

@@ -91,6 +91,8 @@ spec:
           mountPath: {{ .Values.kubeletPlugin.kubeletPluginsDirectoryPath | quote }}
         - name: cdi
           mountPath: /var/run/cdi
+        - name: dra-metadata
+          mountPath: /var/run/dra
       volumes:
       - name: plugins-registry
         hostPath:
@@ -101,6 +103,10 @@ spec:
       - name: cdi
         hostPath:
           path: /var/run/cdi
+      - name: dra-metadata
+        hostPath:
+          path: /var/run/dra
+          type: DirectoryOrCreate
       {{- with .Values.kubeletPlugin.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
