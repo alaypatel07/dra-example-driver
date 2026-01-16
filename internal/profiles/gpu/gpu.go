@@ -68,6 +68,9 @@ func (p Profile) EnumerateDevices() (resourceslice.DriverResources, error) {
 				"driverVersion": {
 					VersionValue: ptr.To("1.0.0"),
 				},
+				"resource.kubernetes.io/pciBusID": {
+					StringValue: ptr.To(fmt.Sprintf("0000:%02X:00.0", i)),
+				},
 			},
 			Capacity: map[resourceapi.QualifiedName]resourceapi.DeviceCapacity{
 				"memory": {
