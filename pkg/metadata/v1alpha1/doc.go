@@ -14,15 +14,15 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package downwardapihelper provides a wrapper around kubeletplugin that automatically
-// handles device metadata JSON files, similar to Kubernetes downward API.
-//
-// Device metadata types are defined in pkg/metadata and its versioned sub-packages.
-package downwardapihelper
+// +k8s:deepcopy-gen=package
+// +k8s:conversion-gen=sigs.k8s.io/dra-example-driver/pkg/metadata
+// +k8s:defaulter-gen=TypeMeta
+// +groupName=metadata.resource.k8s.io
 
-const (
-	// PodClaimNameAnnotation is the annotation key set by the kubelet on
-	// ResourceClaims created from a template. It contains the pod-local
-	// name used to reference the claim in the pod spec.
-	PodClaimNameAnnotation = "resource.kubernetes.io/pod-claim-name"
-)
+// Package v1alpha1 contains the v1alpha1 version of the DRA device metadata
+// API types. These are the external (versioned) types that get serialized
+// to JSON metadata files.
+//
+// When the schema evolves, new version packages (e.g., v1beta1) are added
+// alongside this one, with conversion functions to translate between versions.
+package v1alpha1

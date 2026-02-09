@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 
 	"k8s.io/apimachinery/pkg/types"
+
+	"sigs.k8s.io/dra-example-driver/pkg/metadata/v1alpha1"
 )
 
 // metadataWriter handles writing and deleting device metadata JSON files.
@@ -39,7 +41,7 @@ func newMetadataWriter(baseDir string) (*metadataWriter, error) {
 }
 
 // write writes the device metadata to a JSON file.
-func (w *metadataWriter) write(namespace, name string, uid types.UID, metadata *DeviceMetadata) error {
+func (w *metadataWriter) write(namespace, name string, uid types.UID, dm *v1alpha1.DeviceMetadata) error {
 	path := w.getPath(namespace, name, uid)
 
 	// Ensure the parent directory exists
@@ -48,7 +50,7 @@ func (w *metadataWriter) write(namespace, name string, uid types.UID, metadata *
 		return fmt.Errorf("create metadata subdirectory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(metadata, "", "  ")
+	data, err := json.MarshalIndent(dm, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal device metadata: %w", err)
 	}

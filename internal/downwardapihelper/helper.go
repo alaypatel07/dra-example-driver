@@ -23,7 +23,6 @@ import (
 
 	resourceapi "k8s.io/api/resource/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/dynamic-resource-allocation/resourceslice"
@@ -31,17 +30,9 @@ import (
 	cdiapi "tags.cncf.io/container-device-interface/pkg/cdi"
 	cdiparser "tags.cncf.io/container-device-interface/pkg/parser"
 	cdispec "tags.cncf.io/container-device-interface/specs-go"
-)
 
-// DriverDataProvider is called during NodePrepareResources to get
-// runtime-discovered data for each device.
-// Return nil if no additional data is needed for a device.
-// Drivers can return arbitrary structured data as RawExtension.
-type DriverDataProvider func(
-	claim *resourceapi.ResourceClaim,
-	poolName string,
-	deviceName string,
-) *runtime.RawExtension
+	"sigs.k8s.io/dra-example-driver/pkg/metadata/v1alpha1"
+)
 
 // Helper wraps kubeletplugin.Helper and adds automatic device metadata JSON handling.
 type Helper struct {
@@ -50,7 +41,6 @@ type Helper struct {
 
 	// Metadata handling
 	metadataWriter *metadataWriter
-	dataProvider   DriverDataProvider
 
 	// CDI handling for metadata mount
 	cdiCache *cdiapi.Cache
@@ -66,7 +56,6 @@ type Option func(*options) error
 type options struct {
 	metadataPath string
 	cdiRoot      string
-	dataProvider DriverDataProvider
 }
 
 // DeviceMetadataJSON enables writing device metadata JSON files.
@@ -83,17 +72,6 @@ func DeviceMetadataJSON(metadataPath, cdiRoot string) Option {
 	return func(o *options) error {
 		o.metadataPath = metadataPath
 		o.cdiRoot = cdiRoot
-		return nil
-	}
-}
-
-// DeviceMetadataJSONWithDriverData enables metadata with driver-provided data.
-// The provider is called for each device during prepare to get runtime data.
-func DeviceMetadataJSONWithDriverData(metadataPath, cdiRoot string, provider DriverDataProvider) Option {
-	return func(o *options) error {
-		o.metadataPath = metadataPath
-		o.cdiRoot = cdiRoot
-		o.dataProvider = provider
 		return nil
 	}
 }
@@ -116,7 +94,6 @@ func Start(
 	h := &Helper{
 		driverName:    driverName,
 		devicesByPool: make(map[string]map[string]resourceapi.Device),
-		dataProvider:  helperOpts.dataProvider,
 	}
 
 	if helperOpts.metadataPath != "" {
@@ -205,11 +182,11 @@ func (h *Helper) writeMetadataForClaim(claim *resourceapi.ResourceClaim, devices
 		return nil
 	}
 
-	metadata, err := h.buildMetadata(claim, devices)
+	dm, err := h.buildMetadata(claim, devices)
 	if err != nil {
 		return fmt.Errorf("build metadata: %w", err)
 	}
-	return h.metadataWriter.write(claim.Namespace, claim.Name, claim.UID, metadata)
+	return h.metadataWriter.write(claim.Namespace, claim.Name, claim.UID, dm)
 }
 
 // deleteMetadataForClaim removes metadata for a claim.
@@ -288,25 +265,22 @@ func (h *Helper) deleteMetadataCDISpec(uid types.UID) error {
 
 // buildMetadata constructs the DeviceMetadata for a claim.
 // Returns an error if device attributes cannot be looked up.
-func (h *Helper) buildMetadata(claim *resourceapi.ResourceClaim, preparedDevices []kubeletplugin.Device) (*DeviceMetadata, error) {
-	metadata := &DeviceMetadata{
+func (h *Helper) buildMetadata(claim *resourceapi.ResourceClaim, preparedDevices []kubeletplugin.Device) (*v1alpha1.DeviceMetadata, error) {
+	dm := &v1alpha1.DeviceMetadata{
 		TypeMeta: metav1.TypeMeta{
-			APIVersion: APIVersion,
-			Kind:       Kind,
+			APIVersion: v1alpha1.SchemeGroupVersion.String(),
+			Kind:       "DeviceMetadata",
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      claim.Name,
 			Namespace: claim.Namespace,
 			UID:       claim.UID,
 		},
-		// PodClaimName is set for claims created from a template.
-		// It contains the name used in the pod spec to reference this claim.
-		PodClaimName: claim.Annotations[PodClaimNameAnnotation],
-		Requests:     []RequestMetadata{},
+		Requests: []v1alpha1.DeviceMetadataRequest{},
 	}
 
 	if claim.Status.Allocation == nil {
-		return metadata, nil
+		return dm, nil
 	}
 
 	// Build a map of request name -> devices
@@ -322,9 +296,9 @@ func (h *Helper) buildMetadata(claim *resourceapi.ResourceClaim, preparedDevices
 
 	// Process each request in the claim spec
 	for _, request := range claim.Spec.Devices.Requests {
-		requestMeta := RequestMetadata{
+		requestMeta := v1alpha1.DeviceMetadataRequest{
 			Name:    request.Name,
-			Devices: []DeviceInfo{},
+			Devices: []v1alpha1.Device{},
 		}
 
 		devices := requestDevicesMap[request.Name]
@@ -334,25 +308,18 @@ func (h *Helper) buildMetadata(claim *resourceapi.ResourceClaim, preparedDevices
 				return nil, fmt.Errorf("get attributes for device %s/%s: %w", device.PoolName, device.DeviceName, err)
 			}
 
-			deviceInfo := DeviceInfo{
-				Device:     device.DeviceName,
+			requestMeta.Devices = append(requestMeta.Devices, v1alpha1.Device{
+				Name:       device.DeviceName,
+				Driver:     h.driverName,
+				Pool:       device.PoolName,
 				Attributes: attrs,
-			}
-
-			// Call driver data provider if configured
-			if h.dataProvider != nil {
-				if data := h.dataProvider(claim, device.PoolName, device.DeviceName); data != nil {
-					deviceInfo.Data = *data
-				}
-			}
-
-			requestMeta.Devices = append(requestMeta.Devices, deviceInfo)
+			})
 		}
 
-		metadata.Requests = append(metadata.Requests, requestMeta)
+		dm.Requests = append(dm.Requests, requestMeta)
 	}
 
-	return metadata, nil
+	return dm, nil
 }
 
 // pluginWrapper wraps the user's DRAPlugin to intercept prepare/unprepare calls.

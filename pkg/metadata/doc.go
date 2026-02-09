@@ -1,5 +1,5 @@
 /*
-Copyright YEAR The Kubernetes Authors.
+Copyright 2025 The Kubernetes Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -13,3 +13,13 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 */
+
+// +k8s:deepcopy-gen=package
+
+// Package metadata contains the internal (unversioned) types for DRA device
+// metadata. These types represent the canonical in-memory representation of
+// device metadata, used by both drivers and consumers.
+//
+// Versioned types live in sub-packages (e.g., v1alpha1). Conversion between
+// versioned and internal types is handled by the scheme infrastructure.
+package metadata
