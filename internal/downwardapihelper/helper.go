@@ -60,13 +60,13 @@ type options struct {
 
 // DeviceMetadataJSON enables writing device metadata JSON files.
 // When enabled, the server automatically:
-//   - Writes metadata after PrepareResourceClaims succeeds
+//   - Writes per-request metadata after PrepareResourceClaims succeeds
 //   - Deletes metadata after UnprepareResourceClaims succeeds
 //   - Includes device attributes from PublishResources()
-//   - Mounts the metadata file into containers via CDI
+//   - Mounts the metadata files into containers via CDI
 //
 // Parameters:
-//   - metadataPath: where metadata JSON files are written (e.g., /var/run/dra/<driver>)
+//   - metadataPath: base dir for metadata JSON files (e.g., /var/run/dra-device-attributes)
 //   - cdiRoot: where CDI specs are written (e.g., /var/run/cdi)
 func DeviceMetadataJSON(metadataPath, cdiRoot string) Option {
 	return func(o *options) error {
@@ -97,7 +97,7 @@ func Start(
 	}
 
 	if helperOpts.metadataPath != "" {
-		writer, err := newMetadataWriter(helperOpts.metadataPath)
+		writer, err := newMetadataWriter(helperOpts.metadataPath, driverName)
 		if err != nil {
 			return nil, err
 		}
@@ -176,25 +176,47 @@ func (h *Helper) getDeviceAttributes(poolName, deviceName string) (map[resourcea
 	return device.Attributes, nil
 }
 
-// writeMetadataForClaim builds and writes metadata for a prepared claim.
+// writeMetadataForClaim builds and writes per-request metadata files for a prepared claim.
+// Each request gets its own file at:
+//
+//	<baseDir>/<namespace>_<claimName>/<requestName>/<driverName>-metadata.json
 func (h *Helper) writeMetadataForClaim(claim *resourceapi.ResourceClaim, devices []kubeletplugin.Device) error {
 	if h.metadataWriter == nil {
 		return nil
 	}
 
-	dm, err := h.buildMetadata(claim, devices)
-	if err != nil {
-		return fmt.Errorf("build metadata: %w", err)
+	// Build a map of request name -> devices
+	requestDevicesMap := make(map[string][]kubeletplugin.Device)
+	for _, device := range devices {
+		for _, requestName := range device.Requests {
+			requestDevicesMap[requestName] = append(requestDevicesMap[requestName], device)
+		}
+		if len(device.Requests) == 0 {
+			requestDevicesMap[""] = append(requestDevicesMap[""], device)
+		}
 	}
-	return h.metadataWriter.write(claim.Namespace, claim.Name, claim.UID, dm)
+
+	// Write one metadata file per request
+	for _, request := range claim.Spec.Devices.Requests {
+		dm, err := h.buildRequestMetadata(claim, request.Name, requestDevicesMap[request.Name])
+		if err != nil {
+			return fmt.Errorf("build metadata for request %q: %w", request.Name, err)
+		}
+		if err := h.metadataWriter.write(claim.Namespace, claim.Name, request.Name, dm); err != nil {
+			return fmt.Errorf("write metadata for request %q: %w", request.Name, err)
+		}
+		klog.V(4).Infof("Wrote metadata for claim %s/%s request %s", claim.Namespace, claim.Name, request.Name)
+	}
+
+	return nil
 }
 
-// deleteMetadataForClaim removes metadata for a claim.
+// deleteMetadataForClaim removes all metadata files for a claim.
 func (h *Helper) deleteMetadataForClaim(namespace, name string, uid types.UID) error {
 	if h.metadataWriter == nil {
 		return nil
 	}
-	return h.metadataWriter.delete(namespace, name, uid)
+	return h.metadataWriter.deleteClaimDir(namespace, name)
 }
 
 // cdiVendor returns the CDI vendor name for this driver.
@@ -205,15 +227,27 @@ func (h *Helper) cdiVendor() string {
 // cdiClass returns the CDI class for metadata.
 const cdiMetadataClass = "metadata"
 
-// createMetadataCDISpec creates a CDI spec that mounts the metadata file for a claim.
+// createMetadataCDISpec creates a CDI spec that mounts the per-request metadata
+// files for a claim into the container.
 // Returns the CDI device ID that should be added to container specs.
-func (h *Helper) createMetadataCDISpec(namespace, name string, uid types.UID) (string, error) {
+func (h *Helper) createMetadataCDISpec(claim *resourceapi.ResourceClaim) (string, error) {
 	if h.cdiCache == nil {
 		return "", nil
 	}
 
-	metadataFilePath := h.metadataWriter.getPath(namespace, name, uid)
-	deviceName := string(uid)
+	deviceName := string(claim.UID)
+
+	// Create one bind mount per request metadata file
+	var mounts []*cdispec.Mount
+	for _, request := range claim.Spec.Devices.Requests {
+		hostPath := h.metadataWriter.getPath(claim.Namespace, claim.Name, request.Name)
+		containerPath := h.metadataWriter.getContainerPath(claim.Name, request.Name)
+		mounts = append(mounts, &cdispec.Mount{
+			HostPath:      hostPath,
+			ContainerPath: containerPath,
+			Options:       []string{"ro", "bind"},
+		})
+	}
 
 	spec := &cdispec.Spec{
 		Kind: h.cdiVendor() + "/" + cdiMetadataClass,
@@ -221,13 +255,7 @@ func (h *Helper) createMetadataCDISpec(namespace, name string, uid types.UID) (s
 			{
 				Name: deviceName,
 				ContainerEdits: cdispec.ContainerEdits{
-					Mounts: []*cdispec.Mount{
-						{
-							HostPath:      metadataFilePath,
-							ContainerPath: fmt.Sprintf("/var/run/dra/%s/%s/metadata.json", h.driverName, name),
-							Options:       []string{"ro", "bind"},
-						},
-					},
+					Mounts: mounts,
 				},
 			},
 		},
@@ -239,13 +267,13 @@ func (h *Helper) createMetadataCDISpec(namespace, name string, uid types.UID) (s
 	}
 	spec.Version = minVersion
 
-	specName := cdiapi.GenerateTransientSpecName(h.cdiVendor(), cdiMetadataClass, string(uid))
+	specName := cdiapi.GenerateTransientSpecName(h.cdiVendor(), cdiMetadataClass, string(claim.UID))
 	if err := h.cdiCache.WriteSpec(spec, specName); err != nil {
 		return "", fmt.Errorf("write CDI spec: %w", err)
 	}
 
 	cdiDeviceID := cdiparser.QualifiedName(h.cdiVendor(), cdiMetadataClass, deviceName)
-	klog.V(4).Infof("Created CDI spec for metadata mount: %s -> %s", metadataFilePath, cdiDeviceID)
+	klog.V(4).Infof("Created CDI spec for metadata mounts: claim %s/%s -> %s", claim.Namespace, claim.Name, cdiDeviceID)
 	return cdiDeviceID, nil
 }
 
@@ -263,9 +291,8 @@ func (h *Helper) deleteMetadataCDISpec(uid types.UID) error {
 	return nil
 }
 
-// buildMetadata constructs the DeviceMetadata for a claim.
-// Returns an error if device attributes cannot be looked up.
-func (h *Helper) buildMetadata(claim *resourceapi.ResourceClaim, preparedDevices []kubeletplugin.Device) (*v1alpha1.DeviceMetadata, error) {
+// buildRequestMetadata constructs a DeviceMetadata for a single request within a claim.
+func (h *Helper) buildRequestMetadata(claim *resourceapi.ResourceClaim, requestName string, devices []kubeletplugin.Device) (*v1alpha1.DeviceMetadata, error) {
 	dm := &v1alpha1.DeviceMetadata{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: v1alpha1.SchemeGroupVersion.String(),
@@ -276,47 +303,26 @@ func (h *Helper) buildMetadata(claim *resourceapi.ResourceClaim, preparedDevices
 			Namespace: claim.Namespace,
 			UID:       claim.UID,
 		},
-		Requests: []v1alpha1.DeviceMetadataRequest{},
+		Requests: []v1alpha1.DeviceMetadataRequest{
+			{
+				Name:    requestName,
+				Devices: []v1alpha1.Device{},
+			},
+		},
 	}
 
-	if claim.Status.Allocation == nil {
-		return dm, nil
-	}
-
-	// Build a map of request name -> devices
-	requestDevicesMap := make(map[string][]kubeletplugin.Device)
-	for _, device := range preparedDevices {
-		for _, requestName := range device.Requests {
-			requestDevicesMap[requestName] = append(requestDevicesMap[requestName], device)
-		}
-		if len(device.Requests) == 0 {
-			requestDevicesMap[""] = append(requestDevicesMap[""], device)
-		}
-	}
-
-	// Process each request in the claim spec
-	for _, request := range claim.Spec.Devices.Requests {
-		requestMeta := v1alpha1.DeviceMetadataRequest{
-			Name:    request.Name,
-			Devices: []v1alpha1.Device{},
+	for _, device := range devices {
+		attrs, err := h.getDeviceAttributes(device.PoolName, device.DeviceName)
+		if err != nil {
+			return nil, fmt.Errorf("get attributes for device %s/%s: %w", device.PoolName, device.DeviceName, err)
 		}
 
-		devices := requestDevicesMap[request.Name]
-		for _, device := range devices {
-			attrs, err := h.getDeviceAttributes(device.PoolName, device.DeviceName)
-			if err != nil {
-				return nil, fmt.Errorf("get attributes for device %s/%s: %w", device.PoolName, device.DeviceName, err)
-			}
-
-			requestMeta.Devices = append(requestMeta.Devices, v1alpha1.Device{
-				Name:       device.DeviceName,
-				Driver:     h.driverName,
-				Pool:       device.PoolName,
-				Attributes: attrs,
-			})
-		}
-
-		dm.Requests = append(dm.Requests, requestMeta)
+		dm.Requests[0].Devices = append(dm.Requests[0].Devices, v1alpha1.Device{
+			Name:       device.DeviceName,
+			Driver:     h.driverName,
+			Pool:       device.PoolName,
+			Attributes: attrs,
+		})
 	}
 
 	return dm, nil
@@ -343,7 +349,7 @@ func (w *pluginWrapper) PrepareResourceClaims(ctx context.Context, claims []*res
 		if prepareResult.Err == nil && w.helper.metadataWriter != nil {
 			claim := claimByUID[uid]
 
-			// Write metadata JSON file
+			// Write per-request metadata JSON files
 			if err := w.helper.writeMetadataForClaim(claim, prepareResult.Devices); err != nil {
 				klog.Errorf("Failed to write device metadata for claim %v, unpreparing and failing allocation: %v", uid, err)
 				w.unprepareOnFailure(ctx, uid, claim)
@@ -352,10 +358,9 @@ func (w *pluginWrapper) PrepareResourceClaims(ctx context.Context, claims []*res
 				}
 				continue
 			}
-			klog.V(4).Infof("Wrote device metadata for claim %s/%s", claim.Namespace, claim.Name)
 
-			// Create CDI spec for metadata mount and add device ID to all devices
-			cdiDeviceID, err := w.helper.createMetadataCDISpec(claim.Namespace, claim.Name, claim.UID)
+			// Create CDI spec for metadata mounts and add device ID to all devices
+			cdiDeviceID, err := w.helper.createMetadataCDISpec(claim)
 			if err != nil {
 				klog.Errorf("Failed to create CDI spec for claim %v, unpreparing and failing allocation: %v", uid, err)
 				w.helper.deleteMetadataForClaim(claim.Namespace, claim.Name, claim.UID)
@@ -402,7 +407,7 @@ func (w *pluginWrapper) UnprepareResourceClaims(ctx context.Context, claims []ku
 		if deleteErr := w.helper.deleteMetadataCDISpec(claim.UID); deleteErr != nil {
 			klog.Warningf("Failed to delete CDI spec for claim %v: %v", claim.UID, deleteErr)
 		}
-		// Delete metadata JSON file
+		// Delete metadata directory for this claim
 		if deleteErr := w.helper.deleteMetadataForClaim(claim.Namespace, claim.Name, claim.UID); deleteErr != nil {
 			klog.Warningf("Failed to delete device metadata for claim %v: %v", claim.UID, deleteErr)
 		}

@@ -22,27 +22,29 @@ import (
 	"os"
 	"path/filepath"
 
-	"k8s.io/apimachinery/pkg/types"
-
 	"sigs.k8s.io/dra-example-driver/pkg/metadata/v1alpha1"
 )
 
 // metadataWriter handles writing and deleting device metadata JSON files.
+// Files follow the KEP-5304 path convention:
+//
+//	<baseDir>/<namespace>_<claimName>/<requestName>/<driverName>-metadata.json
 type metadataWriter struct {
-	baseDir string
+	baseDir    string
+	driverName string
 }
 
 // newMetadataWriter creates a new metadataWriter.
-func newMetadataWriter(baseDir string) (*metadataWriter, error) {
+func newMetadataWriter(baseDir, driverName string) (*metadataWriter, error) {
 	if err := os.MkdirAll(baseDir, 0755); err != nil {
 		return nil, fmt.Errorf("create metadata directory: %w", err)
 	}
-	return &metadataWriter{baseDir: baseDir}, nil
+	return &metadataWriter{baseDir: baseDir, driverName: driverName}, nil
 }
 
-// write writes the device metadata to a JSON file.
-func (w *metadataWriter) write(namespace, name string, uid types.UID, dm *v1alpha1.DeviceMetadata) error {
-	path := w.getPath(namespace, name, uid)
+// write writes the device metadata for a single request to a JSON file.
+func (w *metadataWriter) write(namespace, claimName, requestName string, dm *v1alpha1.DeviceMetadata) error {
+	path := w.getPath(namespace, claimName, requestName)
 
 	// Ensure the parent directory exists
 	dir := filepath.Dir(path)
@@ -69,26 +71,29 @@ func (w *metadataWriter) write(namespace, name string, uid types.UID, dm *v1alph
 	return nil
 }
 
-// delete removes the metadata file for a claim and cleans up empty directories.
-func (w *metadataWriter) delete(namespace, name string, uid types.UID) error {
-	path := w.getPath(namespace, name, uid)
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("remove metadata file: %w", err)
+// deleteClaimDir removes the entire claim directory and all metadata files within it.
+func (w *metadataWriter) deleteClaimDir(namespace, claimName string) error {
+	claimDir := w.getClaimDir(namespace, claimName)
+	if err := os.RemoveAll(claimDir); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove claim metadata directory: %w", err)
 	}
-
-	// Try to remove the claim directory (will fail if not empty, which is fine)
-	claimDir := filepath.Dir(path)
-	os.Remove(claimDir)
-
-	// Try to remove the namespace directory (will fail if not empty, which is fine)
-	nsDir := filepath.Dir(claimDir)
-	os.Remove(nsDir)
-
 	return nil
 }
 
-// getPath returns the path where the metadata file is written.
-// Path format: <baseDir>/<namespace>/<claim-name>/metadata.json
-func (w *metadataWriter) getPath(namespace, name string, uid types.UID) string {
-	return filepath.Join(w.baseDir, namespace, name, "metadata.json")
+// getPath returns the path for a per-request metadata file.
+// Path format: <baseDir>/<namespace>_<claimName>/<requestName>/<driverName>-metadata.json
+func (w *metadataWriter) getPath(namespace, claimName, requestName string) string {
+	return filepath.Join(w.getClaimDir(namespace, claimName), requestName, w.driverName+"-metadata.json")
+}
+
+// getClaimDir returns the claim directory path.
+// Path format: <baseDir>/<namespace>_<claimName>
+func (w *metadataWriter) getClaimDir(namespace, claimName string) string {
+	return filepath.Join(w.baseDir, namespace+"_"+claimName)
+}
+
+// getContainerPath returns the container-side path for a per-request metadata file.
+// Path format: /var/run/dra-device-attributes/<claimName>/<requestName>/<driverName>-metadata.json
+func (w *metadataWriter) getContainerPath(claimName, requestName string) string {
+	return filepath.Join("/var/run/dra-device-attributes", claimName, requestName, w.driverName+"-metadata.json")
 }

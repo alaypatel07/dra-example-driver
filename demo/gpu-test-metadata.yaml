@@ -1,5 +1,6 @@
 # Test pod that mounts and displays device metadata JSON
-# The metadata is written to /var/run/dra/<driver-name>/<namespace>/<claim-name>-<uid>.json
+# Per KEP-5304, metadata is written to:
+#   /var/run/dra-device-attributes/<ns>_<claim>/<requestName>/<driverName>-metadata.json
 
 ---
 apiVersion: v1
@@ -40,7 +41,7 @@ spec:
       # Wait for metadata file to be created
       sleep 2
       # Find and display metadata files
-      find /var/run/dra -name "*.json" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || echo "No metadata files found"
+      find /var/run/dra-device-attributes -name "*-metadata.json" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || echo "No metadata files found"
       echo ""
       echo "=== Environment Variables ==="
       export
@@ -51,7 +52,7 @@ spec:
     resources:
       claims:
       - name: gpu
-    # Note: /var/run/dra is automatically mounted via CDI
+    # Note: /var/run/dra-device-attributes is automatically mounted via CDI
   resourceClaims:
   - name: gpu
     resourceClaimTemplateName: single-gpu

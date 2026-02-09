@@ -20,7 +20,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	resourceapi "k8s.io/api/resource/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -60,7 +59,7 @@ func NewDriver(ctx context.Context, config *Config) (*driver, error) {
 		kubeletplugin.PluginDataDirectoryPath(config.DriverPluginPath()),
 	}
 
-	metadataPath := filepath.Join("/var/run/dra", config.flags.driverName)
+	metadataPath := "/var/run/dra-device-attributes"
 	helper, err := downwardapihelper.Start(
 		ctx,
 		driver,

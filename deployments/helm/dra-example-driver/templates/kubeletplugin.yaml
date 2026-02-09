@@ -92,7 +92,7 @@ spec:
         - name: cdi
           mountPath: /var/run/cdi
         - name: dra-metadata
-          mountPath: /var/run/dra
+          mountPath: /var/run/dra-device-attributes
       volumes:
       - name: plugins-registry
         hostPath:
@@ -105,7 +105,7 @@ spec:
           path: /var/run/cdi
       - name: dra-metadata
         hostPath:
-          path: /var/run/dra
+          path: /var/run/dra-device-attributes
           type: DirectoryOrCreate
       {{- with .Values.kubeletPlugin.nodeSelector }}
       nodeSelector:

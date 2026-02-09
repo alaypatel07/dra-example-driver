@@ -39,7 +39,7 @@ spec:
     - |
       echo "=== Device Metadata JSON ==="
       sleep 2
-      find /var/run/dra -name "*.json" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || echo "No metadata files found"
+      find /var/run/dra-device-attributes -name "*-metadata.json" -exec echo "--- {} ---" \; -exec cat {} \; 2>/dev/null || echo "No metadata files found"
       echo ""
       echo "=== Environment Variables ==="
       export
@@ -50,7 +50,7 @@ spec:
     resources:
       claims:
       - name: gpus
-    # Note: /var/run/dra is automatically mounted via CDI
+    # Note: /var/run/dra-device-attributes is automatically mounted via CDI
   resourceClaims:
   - name: gpus
     resourceClaimTemplateName: multi-gpu
