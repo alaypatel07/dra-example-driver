@@ -227,54 +227,67 @@ func (h *Helper) cdiVendor() string {
 // cdiClass returns the CDI class for metadata.
 const cdiMetadataClass = "metadata"
 
-// createMetadataCDISpec creates a CDI spec that mounts the per-request metadata
-// files for a claim into the container.
-// Returns the CDI device ID that should be added to container specs.
-func (h *Helper) createMetadataCDISpec(claim *resourceapi.ResourceClaim) (string, error) {
+// metadataCDIDeviceName returns the CDI device name for a request's metadata,
+// following the KEP-5304 convention: {claimNamespace}_{claimName}_{requestName}_metadata
+func metadataCDIDeviceName(namespace, claimName, requestName string) string {
+	return namespace + "_" + claimName + "_" + requestName + "_metadata"
+}
+
+// createMetadataCDISpecs creates a CDI spec with one device per request,
+// each mounting that request's metadata file into the container.
+// Returns a map of requestName -> CDI device ID.
+//
+// CDI device ID format (per KEP-5304):
+//
+//	{driverName}/metadata={claimNamespace}_{claimName}_{requestName}_metadata
+func (h *Helper) createMetadataCDISpecs(claim *resourceapi.ResourceClaim) (map[string]string, error) {
 	if h.cdiCache == nil {
-		return "", nil
+		return nil, nil
 	}
 
-	deviceName := string(claim.UID)
+	// Build one CDI device per request
+	var devices []cdispec.Device
+	cdiDeviceIDs := make(map[string]string) // requestName -> qualified CDI device ID
 
-	// Create one bind mount per request metadata file
-	var mounts []*cdispec.Mount
 	for _, request := range claim.Spec.Devices.Requests {
+		deviceName := metadataCDIDeviceName(claim.Namespace, claim.Name, request.Name)
 		hostPath := h.metadataWriter.getPath(claim.Namespace, claim.Name, request.Name)
 		containerPath := h.metadataWriter.getContainerPath(claim.Name, request.Name)
-		mounts = append(mounts, &cdispec.Mount{
-			HostPath:      hostPath,
-			ContainerPath: containerPath,
-			Options:       []string{"ro", "bind"},
+
+		devices = append(devices, cdispec.Device{
+			Name: deviceName,
+			ContainerEdits: cdispec.ContainerEdits{
+				Mounts: []*cdispec.Mount{
+					{
+						HostPath:      hostPath,
+						ContainerPath: containerPath,
+						Options:       []string{"ro", "bind"},
+					},
+				},
+			},
 		})
+
+		cdiDeviceIDs[request.Name] = cdiparser.QualifiedName(h.cdiVendor(), cdiMetadataClass, deviceName)
 	}
 
 	spec := &cdispec.Spec{
-		Kind: h.cdiVendor() + "/" + cdiMetadataClass,
-		Devices: []cdispec.Device{
-			{
-				Name: deviceName,
-				ContainerEdits: cdispec.ContainerEdits{
-					Mounts: mounts,
-				},
-			},
-		},
+		Kind:    h.cdiVendor() + "/" + cdiMetadataClass,
+		Devices: devices,
 	}
 
 	minVersion, err := cdiapi.MinimumRequiredVersion(spec)
 	if err != nil {
-		return "", fmt.Errorf("get minimum CDI version: %w", err)
+		return nil, fmt.Errorf("get minimum CDI version: %w", err)
 	}
 	spec.Version = minVersion
 
 	specName := cdiapi.GenerateTransientSpecName(h.cdiVendor(), cdiMetadataClass, string(claim.UID))
 	if err := h.cdiCache.WriteSpec(spec, specName); err != nil {
-		return "", fmt.Errorf("write CDI spec: %w", err)
+		return nil, fmt.Errorf("write CDI spec: %w", err)
 	}
 
-	cdiDeviceID := cdiparser.QualifiedName(h.cdiVendor(), cdiMetadataClass, deviceName)
-	klog.V(4).Infof("Created CDI spec for metadata mounts: claim %s/%s -> %s", claim.Namespace, claim.Name, cdiDeviceID)
-	return cdiDeviceID, nil
+	klog.V(4).Infof("Created CDI spec for metadata mounts: claim %s/%s -> %v", claim.Namespace, claim.Name, cdiDeviceIDs)
+	return cdiDeviceIDs, nil
 }
 
 // deleteMetadataCDISpec removes the CDI spec for a claim's metadata.
@@ -359,8 +372,8 @@ func (w *pluginWrapper) PrepareResourceClaims(ctx context.Context, claims []*res
 				continue
 			}
 
-			// Create CDI spec for metadata mounts and add device ID to all devices
-			cdiDeviceID, err := w.helper.createMetadataCDISpec(claim)
+			// Create per-request CDI specs for metadata mounts
+			cdiDeviceIDs, err := w.helper.createMetadataCDISpecs(claim)
 			if err != nil {
 				klog.Errorf("Failed to create CDI spec for claim %v, unpreparing and failing allocation: %v", uid, err)
 				w.helper.deleteMetadataForClaim(claim.Namespace, claim.Name, claim.UID)
@@ -371,13 +384,18 @@ func (w *pluginWrapper) PrepareResourceClaims(ctx context.Context, claims []*res
 				continue
 			}
 
-			// Add the metadata CDI device ID to all devices in the result
-			if cdiDeviceID != "" {
+			// Add per-request metadata CDI device IDs to each device's CDI list.
+			// Each device gets the metadata CDI IDs for the requests it serves.
+			if len(cdiDeviceIDs) > 0 {
 				updatedDevices := make([]kubeletplugin.Device, len(prepareResult.Devices))
 				for i, device := range prepareResult.Devices {
 					updatedDevices[i] = device
 					updatedDevices[i].CDIDeviceIDs = append([]string{}, device.CDIDeviceIDs...)
-					updatedDevices[i].CDIDeviceIDs = append(updatedDevices[i].CDIDeviceIDs, cdiDeviceID)
+					for _, requestName := range device.Requests {
+						if metadataCDIID, ok := cdiDeviceIDs[requestName]; ok {
+							updatedDevices[i].CDIDeviceIDs = append(updatedDevices[i].CDIDeviceIDs, metadataCDIID)
+						}
+					}
 				}
 				result[uid] = kubeletplugin.PrepareResult{Devices: updatedDevices}
 			}
