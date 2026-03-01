@@ -42,6 +42,7 @@ type OpaqueDeviceConfig struct {
 type DeviceState struct {
 	sync.Mutex
 	driverName        string
+	pluginDir         string
 	cdi               *CDIHandler
 	driverResources   resourceslice.DriverResources
 	allocatable       AllocatableDevices
@@ -97,6 +98,7 @@ func NewDeviceState(config *Config) (*DeviceState, error) {
 
 	state := &DeviceState{
 		driverName:        config.flags.driverName,
+		pluginDir:         config.DriverPluginPath(),
 		cdi:               cdi,
 		driverResources:   driverResources,
 		allocatable:       allocatable,
@@ -144,7 +146,12 @@ func (s *DeviceState) Prepare(claim *resourceapi.ResourceClaim) ([]*drapbv1.Devi
 		return nil, fmt.Errorf("prepare failed: %v", err)
 	}
 
-	if err = s.cdi.CreateClaimSpecFile(claimUID, preparedDevices); err != nil {
+	metadataMounts, err := writeClaimMetadata(s.pluginDir, s.driverName, claim, preparedDevices, s.allocatable)
+	if err != nil {
+		return nil, fmt.Errorf("unable to write claim metadata: %v", err)
+	}
+
+	if err = s.cdi.CreateClaimSpecFile(claimUID, preparedDevices, metadataMounts); err != nil {
 		return nil, fmt.Errorf("unable to create CDI spec file for claim: %v", err)
 	}
 
@@ -175,6 +182,10 @@ func (s *DeviceState) Unprepare(claimUID string) error {
 
 	if err := s.unprepareDevices(claimUID, preparedClaims[claimUID]); err != nil {
 		return fmt.Errorf("unprepare failed: %v", err)
+	}
+
+	if err := deleteClaimMetadata(s.pluginDir, claimUID); err != nil {
+		return fmt.Errorf("unable to delete claim metadata: %v", err)
 	}
 
 	err := s.cdi.DeleteClaimSpecFile(claimUID)

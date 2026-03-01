@@ -85,7 +85,7 @@ func (cdi *CDIHandler) CreateCommonSpecFile() error {
 	return cdi.cache.WriteSpec(spec, specName)
 }
 
-func (cdi *CDIHandler) CreateClaimSpecFile(claimUID string, devices profiles.PreparedDevices) error {
+func (cdi *CDIHandler) CreateClaimSpecFile(claimUID string, devices profiles.PreparedDevices, metadataMounts []*cdispec.Mount) error {
 	specName := cdiapi.GenerateTransientSpecName(cdi.vendor(), cdi.class, claimUID)
 
 	spec := &cdispec.Spec{
@@ -114,6 +114,11 @@ func (cdi *CDIHandler) CreateClaimSpecFile(claimUID string, devices profiles.Pre
 		}
 
 		spec.Devices = append(spec.Devices, cdiDevice)
+	}
+
+	if len(metadataMounts) > 0 && len(spec.Devices) > 0 {
+		spec.Devices[0].ContainerEdits.Mounts = append(
+			spec.Devices[0].ContainerEdits.Mounts, metadataMounts...)
 	}
 
 	minVersion, err := cdiapi.MinimumRequiredVersion(spec)

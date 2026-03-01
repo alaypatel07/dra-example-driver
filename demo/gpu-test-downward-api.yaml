@@ -1,0 +1,112 @@
+# Test pods for verifying DRA device metadata downward API.
+# One pod requests a pGPU (type=gpu, has pciBusID),
+# another requests a vGPU (type=vgpu, has mdevUUID).
+# After scheduling, check /var/run/dra-device-attributes/ inside each container.
+
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gpu-downward-api-test
+
+---
+# pGPU claim — selects devices with type == "gpu"
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: gpu-downward-api-test
+  name: pgpu-claim-template
+spec:
+  spec:
+    devices:
+      requests:
+      - name: gpu
+        exactly:
+          deviceClassName: gpu.example.com
+          selectors:
+          - cel:
+              expression: 'device.attributes["gpu.example.com"].type == "gpu"'
+
+---
+# vGPU claim — selects devices with type == "vgpu"
+apiVersion: resource.k8s.io/v1
+kind: ResourceClaimTemplate
+metadata:
+  namespace: gpu-downward-api-test
+  name: vgpu-claim-template
+spec:
+  spec:
+    devices:
+      requests:
+      - name: vgpu
+        exactly:
+          deviceClassName: gpu.example.com
+          selectors:
+          - cel:
+              expression: 'device.attributes["gpu.example.com"].type == "vgpu"'
+
+---
+# Pod requesting a pGPU
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: gpu-downward-api-test
+  name: pgpu-pod
+  labels:
+    app: pgpu-test
+spec:
+  containers:
+  - name: ctr0
+    image: ubuntu:22.04
+    command: ["bash", "-c"]
+    args:
+    - |
+      echo "=== pGPU pod ==="
+      echo "--- environment ---"
+      export
+      echo "--- metadata files ---"
+      find /var/run/dra-device-attributes/ -type f 2>/dev/null || echo "no metadata dir"
+      echo "--- metadata content ---"
+      cat /var/run/dra-device-attributes/*/*/*.json 2>/dev/null || echo "no metadata files"
+      echo "=== sleeping ==="
+      trap 'exit 0' TERM
+      sleep 9999 & wait
+    resources:
+      claims:
+      - name: gpu
+  resourceClaims:
+  - name: gpu
+    resourceClaimTemplateName: pgpu-claim-template
+
+---
+# Pod requesting a vGPU
+apiVersion: v1
+kind: Pod
+metadata:
+  namespace: gpu-downward-api-test
+  name: vgpu-pod
+  labels:
+    app: vgpu-test
+spec:
+  containers:
+  - name: ctr0
+    image: ubuntu:22.04
+    command: ["bash", "-c"]
+    args:
+    - |
+      echo "=== vGPU pod ==="
+      echo "--- environment ---"
+      export
+      echo "--- metadata files ---"
+      find /var/run/dra-device-attributes/ -type f 2>/dev/null || echo "no metadata dir"
+      echo "--- metadata content ---"
+      cat /var/run/dra-device-attributes/*/*/*.json 2>/dev/null || echo "no metadata files"
+      echo "=== sleeping ==="
+      trap 'exit 0' TERM
+      sleep 9999 & wait
+    resources:
+      claims:
+      - name: vgpu
+  resourceClaims:
+  - name: vgpu
+    resourceClaimTemplateName: vgpu-claim-template
