@@ -32,6 +32,7 @@ import (
 const (
 	metadataSubDir            = "dra-device-metadata"
 	containerMetadataBasePath = "/var/run/dra-device-attributes"
+	containerTemplatesSubDir  = "templates"
 )
 
 // KEP-5304 metadata JSON types — matches what kubevirt's virt-launcher expects.
@@ -127,9 +128,16 @@ func writeClaimMetadata(
 			return nil, fmt.Errorf("write metadata file: %w", err)
 		}
 
-		containerPath := filepath.Join(
-			containerMetadataBasePath, claimName, reqName, driverName+"-metadata.json",
-		)
+		var containerPath string
+		if pcn := podClaimName(claim); pcn != nil {
+			containerPath = filepath.Join(
+				containerMetadataBasePath, containerTemplatesSubDir, *pcn, reqName, driverName+"-metadata.json",
+			)
+		} else {
+			containerPath = filepath.Join(
+				containerMetadataBasePath, claimName, reqName, driverName+"-metadata.json",
+			)
+		}
 		mounts = append(mounts, &cdispec.Mount{
 			HostPath:      hostPath,
 			ContainerPath: containerPath,

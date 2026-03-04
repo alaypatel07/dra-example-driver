@@ -2,6 +2,9 @@
 # One pod requests a pGPU (type=gpu, has pciBusID),
 # another requests a vGPU (type=vgpu, has mdevUUID).
 # After scheduling, check /var/run/dra-device-attributes/ inside each container.
+#
+# Path layout (these pods use resourceClaimTemplateName):
+#   /var/run/dra-device-attributes/templates/{podClaimName}/{requestName}/{driver}-metadata.json
 
 ---
 apiVersion: v1
@@ -65,9 +68,9 @@ spec:
       echo "--- environment ---"
       export
       echo "--- metadata files ---"
-      find /var/run/dra-device-attributes/ -type f 2>/dev/null || echo "no metadata dir"
+      find /var/run/dra-device-attributes/ -name '*.json' 2>/dev/null || echo "no metadata dir"
       echo "--- metadata content ---"
-      cat /var/run/dra-device-attributes/*/*/*.json 2>/dev/null || echo "no metadata files"
+      find /var/run/dra-device-attributes/ -name '*.json' -exec cat {} \; 2>/dev/null || echo "no metadata files"
       echo "=== sleeping ==="
       trap 'exit 0' TERM
       sleep 9999 & wait
@@ -98,9 +101,9 @@ spec:
       echo "--- environment ---"
       export
       echo "--- metadata files ---"
-      find /var/run/dra-device-attributes/ -type f 2>/dev/null || echo "no metadata dir"
+      find /var/run/dra-device-attributes/ -name '*.json' 2>/dev/null || echo "no metadata dir"
       echo "--- metadata content ---"
-      cat /var/run/dra-device-attributes/*/*/*.json 2>/dev/null || echo "no metadata files"
+      find /var/run/dra-device-attributes/ -name '*.json' -exec cat {} \; 2>/dev/null || echo "no metadata files"
       echo "=== sleeping ==="
       trap 'exit 0' TERM
       sleep 9999 & wait
