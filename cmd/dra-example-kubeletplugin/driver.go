@@ -25,8 +25,11 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	coreclientset "k8s.io/client-go/kubernetes"
+	"k8s.io/dynamic-resource-allocation/api/metadata/v1alpha1"
 	"k8s.io/dynamic-resource-allocation/kubeletplugin"
 	"k8s.io/klog/v2"
+
+	"sigs.k8s.io/dra-example-driver/pkg/featuregates"
 )
 
 type driver struct {
@@ -49,15 +52,21 @@ func NewDriver(ctx context.Context, config *Config) (*driver, error) {
 	}
 	driver.state = state
 
-	helper, err := kubeletplugin.Start(
-		ctx,
-		driver,
+	opts := []kubeletplugin.Option{
 		kubeletplugin.KubeClient(config.coreclient),
 		kubeletplugin.NodeName(config.flags.nodeName),
 		kubeletplugin.DriverName(config.flags.driverName),
 		kubeletplugin.RegistrarDirectoryPath(config.flags.kubeletRegistrarDirectoryPath),
 		kubeletplugin.PluginDataDirectoryPath(config.DriverPluginPath()),
-	)
+	}
+	if featuregates.Enabled(featuregates.DeviceMetadata) {
+		klog.FromContext(ctx).Info("DeviceMetadata feature gate enabled")
+		opts = append(opts,
+			kubeletplugin.EnableDeviceMetadata(true),
+			kubeletplugin.MetadataVersions(v1alpha1.SchemeGroupVersion),
+		)
+	}
+	helper, err := kubeletplugin.Start(ctx, driver, opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -107,12 +116,22 @@ func (d *driver) prepareResourceClaim(ctx context.Context, claim *resourceapi.Re
 	}
 	var prepared []kubeletplugin.Device
 	for _, preparedPB := range preparedPBs {
-		prepared = append(prepared, kubeletplugin.Device{
+		dev := kubeletplugin.Device{
 			Requests:     preparedPB.GetRequestNames(),
 			PoolName:     preparedPB.GetPoolName(),
 			DeviceName:   preparedPB.GetDeviceName(),
 			CDIDeviceIDs: preparedPB.GetCdiDeviceIds(),
-		})
+		}
+		if featuregates.Enabled(featuregates.DeviceMetadata) {
+			if allocDev, ok := d.state.allocatable[preparedPB.GetDeviceName()]; ok && len(allocDev.Attributes) > 0 {
+				attrs := make(map[string]resourceapi.DeviceAttribute, len(allocDev.Attributes))
+				for k, v := range allocDev.Attributes {
+					attrs[string(k)] = v
+				}
+				dev.Metadata = &kubeletplugin.DeviceMetadata{Attributes: attrs}
+			}
+		}
+		prepared = append(prepared, dev)
 	}
 
 	logger.Info("Returning newly prepared devices for claim", "uid", claim.UID, "devices", prepared)
