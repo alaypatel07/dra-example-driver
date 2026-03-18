@@ -9,6 +9,10 @@ selectorLabelsOverride: {}
 
 allowDefaultNamespace: false
 
+# featureGates allows enabling/disabling alpha/experimental features.
+# Example: featureGates: { DeviceMetadata: true }
+featureGates: {}
+
 # deviceProfile describes the overall shape of the devices managed by the
 # driver. Available profiles are:
 #   - "gpu": Node-local devices configurable through opaque config
