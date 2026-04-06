@@ -86,7 +86,7 @@ spec:
         {{- end }}
         {{- if .Values.featureGates }}
         - name: FEATURE_GATES
-          value: "{{ range $key, $value := .Values.featureGates }}{{ $key }}={{ $value }},{{ end }}"
+          value: "{{ $list := list }}{{ range $key, $value := .Values.featureGates }}{{ $list = append $list (printf "%s=%v" $key $value) }}{{ end }}{{ join "," $list }}"
         {{- end }}
         volumeMounts:
         - name: plugins-registry
